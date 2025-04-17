@@ -1,0 +1,409 @@
+Work Plan:
+Help me write a markdown work plan for two weeks of code writing (ignore the actual timeline, I want the code and the steps as the main focus). Ask me for clarification where things are ambiguous.
+
+Here is my setup:
+I work in a secure environment.
+I shall be coding on a VM in gcloud. I have full admin access to this VM.
+The VM is in Linux. I use Python 3.12.3 on it in VS code, writing either notebooks or direct scripts.
+I have some data that is human created to use as my gold standard. NB there are some data problems in this, such as text truncation.
+I have some anonimised data for testing.
+The data are job descriptions and the answers are the SIC codes that have been assigned by a human expert.
+My end goal is to evaluate an LLM system of assigning SIC codes against the human answers.
+I have access to an API that contains relevant prompt wrapping and RAG to do the task for SIC assignment, I am only focussed on the evaluation.
+I shall need the following:
+1) Secrets handling (not an immediate priority, a colleague is making this, however I need to acknowledge that it could be a blocker)
+2) Proposal of what 'evaluation' looks like. 
+3) Some initial thoughts: Confusion matrix - Exact match vs not exact match with Human.
+4) Does LLM top 5 recommendations contain Human answer if not the top one? LLM< ansewer contains 'Confidence' value. Should we know if a high confidence value is clearly wrong?
+5) Is there a concept of closeness if not exact match? SIC codes are five digit, perhaps getting the first N as a match can be of use/
+6) Create a manager presentation of the evaluation. Perhaps a histogram of matching codes for Match N=1 3xxxx matches 34567, Match first two, 34xxx, etc to N=5.
+7) The gold data (11000) samples takes a long time to get. I need to be ready to use this on the next set. The results should be valid for another dataset.
+8) What checks do I need if the next data are different?
+9) I should have unit tests, asserts, etc.
+10) Please consider and elaborate on anything you think I could have missed.
+
+
+First, I need some clarifications to make the plan more precise:
+
+1.  **LLM API Output:** What is the exact format of the response from the LLM API? Does it return:
+    * Just the single most likely SIC code?
+    * A list of SIC codes, possibly with confidence scores (e.g., `[('12345', 0.9), ('67890', 0.05), ...]`)? Knowing this structure is crucial for designing the evaluation logic (especially for Top-N and confidence checks).
+2.  **Gold Standard Data Format:**
+    * How is the human-assigned SIC code stored for each job description? Is it guaranteed to be a single 5-digit code?
+    * Regarding the "data problems like text truncation" in the gold standard: How should the evaluation handle these records? Should they be excluded from the analysis, flagged, or evaluated anyway?
+3.  **Anonymised Data Role:** What is the specific purpose of the "anonymized data for testing" in *this evaluation task*? Is it meant for:
+    * Testing the code logic before running on the gold standard?
+    * Testing the process of calling the LLM API without using the valuable gold data?
+    * Something else?
+4.  **Definition of SIC "Closeness":** You mentioned matching the first N digits. Is this the primary definition you want to use? Are there other domain-specific ways SIC codes might be considered "close" (e.g., within the same broader industry category even if digits differ significantly)? For now, I'll assume N-digit matching is the main approach.
+5.  **Secrets:** What specific secrets are required? Primarily the API key for the LLM system? Will the secrets handling mechanism provide the key as an environment variable, a file, or via another method?
+
+---
+
+Assuming the most likely scenarios (LLM returns a ranked list with confidences, gold standard is one code per entry, anonymized data is for code testing, N-digit matching is the desired closeness metric), here is a potential work plan:
+
+## Two-Week Code Writing Work Plan: SIC Code LLM Evaluation
+
+**Goal:** Develop and execute a robust evaluation framework to compare LLM-generated SIC codes against human-assigned ("gold standard") codes for job descriptions. Produce actionable insights and a presentation.
+
+**Environment:** gcloud Linux VM, Python 3.12.3, VS Code (Notebooks/Scripts), Pandas, NumPy, Scikit-learn (for confusion matrix/metrics), Matplotlib/Seaborn (for plots).
+
+---
+
+### **Phase 1: Setup, Design & Foundational Code (Conceptual Week 1)**
+
+**Day 1: Environment Setup & Data Ingestion**
+
+* **Task:** Verify VM environment, install necessary Python libraries (`pandas`, `numpy`, `scikit-learn`, `matplotlib`, `seaborn`, potentially `requests` or a specific client library for the LLM API).
+* **Task:** Obtain access to both the gold standard data and the anonymized test data.
+* **Task:** Write initial data loading script/functions (`data_loader.py` or within a notebook).
+    * Load the gold standard data (job descriptions + human SIC codes) into a pandas DataFrame.
+    * Load the anonymized data.
+    * Perform initial inspection: Check data types, missing values, format consistency. Look at examples of known data issues (truncation).
+    * **Code:** Basic Python script/notebook cells using pandas `read_csv`, `read_json`, etc.
+    * **Output:** Loadable DataFrames, initial understanding of data structure and quality issues.
+* **Action:** Request clarifications (as listed above).
+
+**Day 2: Define Evaluation Metrics & Strategy**
+
+* **Task:** Formalize the evaluation metrics based on user requirements and potential clarifications.
+    * **Metric 1: Exact Match Accuracy:** Percentage of job descriptions where the LLM's top predicted SIC code exactly matches the human code.
+    * **Metric 2: Top-N Accuracy:** Percentage of job descriptions where the human SIC code appears within the LLM's top 5 predicted codes.
+    * **Metric 3: Partial Match Analysis (N-Digit Match):**
+        * Define levels: Match@1 (first digit), Match@2, ..., Match@5 (Exact Match).
+        * Calculate the percentage of predictions achieving each level of match *given that it wasn't an exact match* (or perhaps overall distribution).
+    * **Metric 4: Confidence Analysis:**
+        * Analyze the distribution of confidence scores for correct vs. incorrect predictions (Exact Match).
+        * Identify instances of high-confidence incorrect predictions. Define "high confidence" (e.g., > 0.9?).
+    * **Metric 5: Confusion Matrix:** Visualize the Exact Match performance (Human SIC vs LLM Top Prediction). This might be large (many SIC codes), so consider summarizing by top-level digits or focusing on most frequent codes/errors.
+* **Task:** Decide on handling problematic gold standard data (e.g., truncated entries). Strategy: Exclude and report numbers, or flag and analyze separately.
+* **Output:** Clear definitions of all metrics and the strategy for handling data issues.
+
+**Day 3: Design Code Structure & API Interaction**
+
+* **Task:** Outline the Python project structure.
+    * `data_loader.py`: Functions for loading and potentially basic preprocessing.
+    * `llm_api_client.py`: Module to handle interaction with the LLM API. Will contain functions to:
+        * Take a job description (or batch) as input.
+        * Call the API (incorporating secrets handling).
+        * Parse the response into a standard format (e.g., list of tuples `(sic_code, confidence)`).
+        * Handle potential API errors (rate limits, timeouts, invalid responses).
+    * `evaluator.py`: Core logic for calculating all defined metrics. Functions like `calculate_exact_match`, `calculate_top_n`, `calculate_partial_match`, `analyze_confidence`.
+    * `reporting.py`: Functions to generate plots (histograms, confusion matrix plots) and summary statistics/tables.
+    * `main_evaluation.py` / `Evaluation.ipynb`: Orchestrator script/notebook to run the full pipeline: Load data -> Get LLM predictions -> Run evaluations -> Generate reports.
+    * `config.py`: Store constants, file paths, configuration settings (e.g., N for Top-N).
+    * `tests/`: Directory for unit tests.
+* **Task:** Define the interface for secrets handling (placeholder until colleague's solution is ready). How will `llm_api_client.py` expect to receive the API key?
+* **Output:** A clear plan for code modules and their responsibilities. Defined interface for API interaction.
+
+**Day 4: Implement Data Loading & Basic LLM Client**
+
+* **Task:** Implement robust data loading functions in `data_loader.py`, including basic cleaning/preprocessing decided on Day 2 (e.g., handling specific known issues if not excluding). Add assertions to check loaded data structure.
+* **Task:** Implement the structure of `llm_api_client.py`.
+    * Write the function signature for calling the API.
+    * Integrate *placeholder* secrets handling (e.g., read from an environment variable, even if it's not set securely yet).
+    * Implement basic error handling (try-except blocks for API calls).
+    * Implement response parsing based on the *expected* API output format (crucial clarification needed here).
+* **Task:** Add basic logging (`logging` module).
+* **Task:** Write initial unit tests for `data_loader.py`.
+* **Code:** Python functions in `data_loader.py`, `llm_api_client.py`. Basic tests in `tests/`.
+
+**Day 5: Implement Core Evaluation Logic (Exact Match, Top-N)**
+
+* **Task:** Implement functions in `evaluator.py` for:
+    * `calculate_exact_match(llm_top_prediction, human_code)`
+    * `calculate_top_n_accuracy(llm_predictions_list, human_code, n=5)`
+* **Task:** Integrate these functions into the main script/notebook using sample/dummy LLM output data for now.
+* **Task:** Write unit tests for the implemented evaluation functions in `tests/`. Test edge cases (e.g., empty LLM response, missing human code if applicable).
+* **Code:** Python functions in `evaluator.py`, unit tests, updated main script/notebook.
+
+---
+
+### **Phase 2: Full Implementation, Testing & Reporting (Conceptual Week 2)**
+
+**Day 6: Implement Advanced Evaluation Logic (Partial Match, Confidence)**
+
+* **Task:** Implement functions in `evaluator.py` for:
+    * `calculate_partial_match(llm_top_prediction, human_code)`: Returns the number of matching leading digits (0-5).
+    * `analyze_confidence(llm_predictions_list, human_code)`: Extracts confidence scores, flags correctness, identifies high-confidence errors.
+* **Task:** Write unit tests for these new functions.
+* **Code:** Python functions in `evaluator.py`, unit tests.
+
+**Day 7: Integrate Secrets Handling & Test LLM Calls**
+
+* **Task:** Integrate the actual secrets handling mechanism provided by the colleague into `llm_api_client.py`.
+* **Dependency:** This depends on the colleague's progress. **Blocker Risk:** Acknowledge that inability to securely call the API will prevent running on real data.
+* **Task:** Test the `llm_api_client.py` by making a *small number* of real API calls using the anonymized test data (or a small sample of gold data if permitted and necessary). Verify requests and responses. Debug connection/authentication issues.
+* **Task:** Implement caching for LLM results. Store API responses locally (e.g., in a file keyed by job description hash) to avoid re-calling the API for the same input, saving time and cost, especially for the large gold standard set. Add this to `llm_api_client.py` or the main orchestration logic.
+* **Code:** Updated `llm_api_client.py`, potentially a simple file-based cache mechanism.
+
+**Day 8: Implement Reporting & Visualization**
+
+* **Task:** Implement functions in `reporting.py` using Matplotlib/Seaborn:
+    * Generate histogram for Partial Match results (distribution of Match@1, Match@2, etc.).
+    * Generate visualizations for Confidence Analysis (e.g., box plots or histograms of confidence for correct/incorrect predictions).
+    * Generate Confusion Matrix (potentially summarized or focused on key areas).
+    * Function to output summary statistics (Overall Accuracy, Top-5 Accuracy, etc.) to console or file.
+* **Task:** Write tests for reporting functions where feasible (e.g., check if plots are generated without errors, check summary statistic calculation).
+* **Code:** Python functions in `reporting.py`, potentially basic tests.
+
+**Day 9: End-to-End Run on Sample Data & Debugging**
+
+* **Task:** Run the *entire* pipeline (`main_evaluation.py` / `Evaluation.ipynb`) on a small, manageable subset of the gold standard data (e.g., 100-500 samples).
+    * Load data -> Call LLM API (using cache) -> Calculate all metrics -> Generate all reports/plots.
+* **Task:** Debug any integration issues, errors in calculations, or problems with plotting. Refine code as needed. Ensure outputs look reasonable.
+* **Output:** A working end-to-end pipeline, validated on a small scale.
+
+**Day 10: Full Gold Standard Data Run & Analysis**
+
+* **Task:** Execute the evaluation pipeline on the full gold standard dataset (11,000 samples).
+    * **Consideration:** How long will 11,000 API calls take? Monitor progress. Ensure caching works effectively. If runtime is prohibitive, consider running on a statistically significant random sample and document this limitation.
+* **Task:** Collect the results: metrics, generated plots, summary statistics.
+* **Task:** Perform initial analysis of the full results. Do the metrics align with expectations? Are there surprising patterns in the confusion matrix or confidence analysis? Look at specific examples of high-confidence errors or interesting partial matches.
+* **Output:** Comprehensive evaluation results from the full dataset (or large sample). Initial insights.
+
+**Day 11: Prepare Manager Presentation Structure**
+
+* **Task:** Outline the presentation structure:
+    1.  **Project Goal:** Evaluate LLM for SIC code assignment.
+    2.  **Methodology:** Data used (gold standard), LLM system (briefly, as context), Evaluation metrics defined (Exact Match, Top-N, Partial Match, Confidence).
+    3.  **Key Results:** Present the main metrics (Accuracy, Top-N, Partial Match histogram). Show key visualizations (Confusion Matrix summary, Confidence distributions).
+    4.  **Analysis & Insights:** What do the results mean? Strengths/weaknesses of the LLM? Prevalence of high-confidence errors? Nature of partial matches?
+    5.  **Data Quality Impact:** Mention how data issues (truncation) were handled and if they might affect results.
+    6.  **Limitations:** API call constraints, dependency on secrets handling, specific definition of "closeness" used.
+    7.  **Next Steps / Future Considerations:** Reusability for next dataset, checks needed for new data.
+* **Task:** Start populating the presentation with key results and visualizations generated earlier.
+* **Output:** Draft presentation slides/document.
+
+**Day 12: Code Refinement, Documentation & Future-Proofing**
+
+* **Task:** Clean up code: Add comments, docstrings, type hints. Ensure consistency and readability.
+* **Task:** Write a `README.md` file explaining:
+    * Project purpose.
+    * Setup instructions (dependencies, environment variables for secrets).
+    * How to run the evaluation pipeline.
+    * Description of the code structure and key modules.
+* **Task:** Address future-proofing:
+    * Ensure the code reads data paths and configurations from `config.py` or environment variables, not hardcoded.
+    * **Checks for Next Dataset:** What checks are needed?
+        * Schema validation: Do columns match?
+        * Basic data statistics comparison: Is the distribution of job description lengths wildly different?
+        * Check for new/unexpected values or formats.
+        * Consider adding optional data validation steps in `data_loader.py`.
+* **Task:** Ensure all unit tests pass. Add asserts in `main_evaluation.py` to catch potential issues during runtime (e.g., assert DataFrame shapes, check for NaNs).
+* **Code:** Refined code, `README.md`, documented thoughts on checks for new data.
+
+**Day 13: Buffer, Presentation Polish & Error Analysis**
+
+* **Task:** Use this day as a buffer for unexpected delays or issues.
+* **Task:** Deep dive into error analysis: Manually inspect a sample of incorrect predictions (especially high-confidence ones). Are there patterns related to job description length, industry, ambiguity, or the truncation issue? Add qualitative insights to the presentation.
+* **Task:** Refine the manager presentation: Improve clarity, flow, and visual appeal of charts. Ensure the key message is clear.
+* **Output:** Polished presentation, deeper insights from error analysis.
+
+**Day 14: Final Review & Handoff Preparation**
+
+* **Task:** Final review of code, results, documentation, and presentation.
+* **Task:** Ensure the code is runnable by someone else following the README.
+* **Task:** Organize project files logically.
+* **Task:** Prepare for handoff or discussion with the manager.
+* **Output:** Completed, documented, and tested evaluation framework and presentation.
+
+---
+
+### Additional Considerations (Elaborating on Point 10):
+
+1.  **LLM API Costs & Rate Limits:** Calling the API 11,000 times might incur costs and hit rate limits. Factor this in. Caching is essential. Batching requests (if the API supports it) can also help.
+2.  **Error Handling Robustness:** Ensure the `llm_api_client` gracefully handles different API errors (network issues, server errors, auth errors, invalid input) and logs them properly. Maybe implement retries with exponential backoff.
+3.  **Statistical Significance:** If comparing performance across different subsets of data or eventually different models, consider if observed differences are statistically significant.
+4.  **SIC Code Hierarchy:** Beyond N-digit matching, investigate if there's an official SIC hierarchy. Evaluating based on "category match" (e.g., getting the right 2-digit or 3-digit major group) could be a valuable addition to the "closeness" concept.
+5.  **Versioning:** Use Git for code version control from Day 1. Consider how you will track versions of the data and the LLM results if they change.
+6.  **Reproducibility:** Ensure that running the evaluation script/notebook with the same data and cached LLM responses yields the exact same results (set random seeds if any sampling is involved).
+
+
+LLM output from the API:
+1.  **LLM API Output:** What is the exact format of the response from the LLM API? 
+The LLM is attempting to classify the respondent with as few questions as possible. Ifg this is not possible, a followup question is genereated.
+The output is JSON as follows (I'm free typing this, there could be an error, assume good JSON}
+--Data in:
+'{"llm": 'gemini',
+"type": 'sic',
+"job title": "Farm hand",
+"job description": "I work on a farm tesnding crops that are sold to wholesalers",
+"org_description": "A farm that grows and harvests crops to be sold to wholesalers"
+}'
+
+Return:
+{"classified": false,
+"Followup": "Does the farm grow crops for sale to the public?"
+"sic_code": "01110",
+"sic_description": "Growing of cereals (except rice)"
+"sic candidates":
+[{"sic_code": "01110", "sic_description": "Growing of cereals (except rice)", "likelihgood": 0.8},
+{"sic_code": "01120", "sic_description": "Growing of rice", "likelihgood": 0.1},
+{"sic_code": "01130", "sic_description": "Growing of vegetables", "likelihgood": 0.1},
+(other candidates with lower likelihood are added)]
+,
+"reasoning":
+"The company (some explanation from the LLM, I'm not interested in at this point)"}
+
+
+Okay, thank you for providing the LLM API response structure. This gives us concrete details to refine the plan, especially around parsing the output and utilizing the candidate list.
+
+Here's the updated work plan incorporating this information:
+
+---
+
+## Two-Week Code Writing Work Plan: SIC Code LLM Evaluation (Revised)
+
+**Goal:** Develop and execute a robust evaluation framework to compare LLM-generated SIC codes against human-assigned ("gold standard") codes for job descriptions, using the specified API output. Produce actionable insights and a presentation.
+
+**Environment:** gcloud Linux VM, Python 3.12.3, VS Code (Notebooks/Scripts), Pandas, NumPy, Scikit-learn (for confusion matrix/metrics), Matplotlib/Seaborn (for plots).
+
+**API Response Structure:** JSON containing `classified` (bool), `Followup` (str), `sic_code` (str - top guess), `sic_description` (str), `sic_candidates` (list of dicts: `{"sic_code": str, "sic_description": str, "likelihood": float}` - assuming `likelihgood` is `likelihood`), and `reasoning` (str).
+
+---
+
+### **Phase 1: Setup, Design & Foundational Code (Conceptual Week 1)**
+
+**Day 1: Environment Setup & Data Ingestion**
+
+* **(No Change)** Task: Verify VM environment, install necessary Python libraries (`pandas`, `numpy`, `scikit-learn`, `matplotlib`, `seaborn`, `requests` or API client library).
+* **(No Change)** Task: Obtain access to gold standard data and anonymized test data.
+* **(No Change)** Task: Write initial data loading script/functions (`data_loader.py` or notebook). Load gold standard (job desc + human SIC) and anonymized data into DataFrames. Perform initial inspection (types, missing values, format, truncation examples).
+* **(No Change)** Output: Loadable DataFrames, initial understanding of data.
+* **Action:** Request clarifications (remaining points from previous list, plus confirmation on handling `classified: false` and `likelihood` field name/sorting - see below).
+
+**Day 2: Define Evaluation Metrics & Strategy (Refined)**
+
+* **Task:** Formalize evaluation metrics:
+    * **Metric 1: Exact Match Accuracy:** Percentage where LLM's top `sic_code` matches the human code.
+    * **Metric 2: Top-N Accuracy:** Percentage where the human SIC code is present in the `sic_code` values within the top N entries of the `sic_candidates` list. (Confirm list is sorted by `likelihood`).
+    * **Metric 3: Partial Match Analysis (N-Digit Match):** Compare the LLM's top `sic_code` against the human code for matching leading digits (1 to 5). Calculate distribution.
+    * **Metric 4: Confidence Analysis:**
+        * Use the `likelihood` score associated with the top `sic_code` (presumably the first candidate's score).
+        * Analyze score distribution for correct vs. incorrect Exact Matches.
+        * Identify high-confidence errors.
+    * **Metric 5: Confusion Matrix:** (No change) Visualize Exact Match performance (Human SIC vs LLM Top Prediction). Summarize if needed.
+* **Task:** Decide and document strategy for handling `classified: false` entries from the API.
+    * **Option A:** Exclude from accuracy/match metrics, report exclusion percentage.
+    * **Option B:** Evaluate the `sic_code` provided anyway.
+    * **Option C:** Report metrics separately for `classified: true` vs. all.
+    * *(Plan Assumption: Proceed with Option B for now, but build code flexibly to allow filtering based on the `classified` flag.)*
+* **(No Change)** Task: Decide on handling problematic gold standard data (truncation). Strategy: Exclude/flag.
+* **Output:** Clear metric definitions, documented strategy for `classified` flag and data issues.
+
+**Day 3: Design Code Structure & API Interaction (Refined)**
+
+* **Task:** Outline Python project structure (modules: `data_loader.py`, `llm_api_client.py`, `evaluator.py`, `reporting.py`, `main_evaluation.py`/`Evaluation.ipynb`, `config.py`, `tests/`).
+* **Task:** Refine design for `llm_api_client.py`:
+    * Function to call API, handle secrets.
+    * **Crucially:** Robust JSON parsing of the API response.
+    * Helper functions/logic to safely extract key fields:
+        * `classified` (boolean)
+        * `top_sic_code` (string, from top-level `sic_code`)
+        * `top_likelihood` (float, from the first candidate's `likelihood` - *confirm field name*)
+        * `candidate_codes_likelihoods` (list of tuples `(sic_code, likelihood)`, extracted from `sic_candidates`)
+    * Handle potential errors: API errors, JSON parsing errors, missing keys (e.g., `sic_candidates` empty, `likelihood` missing).
+* **(No Change)** Task: Define interface for secrets handling (placeholder).
+* **Output:** Clear module plan, detailed design for API client including JSON parsing and extraction logic.
+
+**Day 4: Implement Data Loading & Basic LLM Client (Refined)**
+
+* **(No Change)** Task: Implement robust data loading (`data_loader.py`), basic cleaning/preprocessing, assertions.
+* **Task:** Implement `llm_api_client.py` structure:
+    * API call function signature.
+    * Placeholder secrets handling.
+    * **Implement JSON parsing logic** based on the provided structure.
+    * **Implement safe extraction** of `classified`, `top_sic_code`, `top_likelihood`, `candidate_codes_likelihoods`. Include default values or error handling for missing/malformed data.
+    * Add basic logging.
+* **(No Change)** Task: Write initial unit tests for `data_loader.py`. Add basic tests for the extraction logic in `llm_api_client.py` using sample JSON strings.
+* **Code:** Python functions in `data_loader.py`, `llm_api_client.py` (with JSON handling). Basic tests.
+
+**Day 5: Implement Core Evaluation Logic (Exact Match, Top-N) (Refined)**
+
+* **Task:** Implement functions in `evaluator.py`:
+    * `calculate_exact_match(llm_top_sic_code, human_code)`
+    * `calculate_top_n_accuracy(candidate_codes_likelihoods, human_code, n=5)` (Takes the list of candidates, checks codes).
+* **Task:** Implement logic in the main script/notebook to handle the `classified` flag according to the chosen strategy (e.g., filter data before passing to evaluation functions or evaluate all and segment results later).
+* **(No Change)** Task: Integrate using sample/dummy parsed LLM output.
+* **(No Change)** Task: Write unit tests for evaluation functions. Test edge cases (e.g., empty candidate list).
+* **Code:** Functions in `evaluator.py`, updated main script/notebook logic, unit tests.
+
+---
+
+### **Phase 2: Full Implementation, Testing & Reporting (Conceptual Week 2)**
+
+**Day 6: Implement Advanced Evaluation Logic (Partial Match, Confidence) (Refined)**
+
+* **Task:** Implement functions in `evaluator.py`:
+    * `calculate_partial_match(llm_top_sic_code, human_code)` (Uses extracted top code).
+    * `analyze_confidence(llm_top_sic_code, human_code, llm_top_likelihood)` (Uses extracted top likelihood). Add logic to categorize confidence scores.
+* **(No Change)** Task: Write unit tests.
+* **Code:** Python functions in `evaluator.py`, unit tests.
+
+**Day 7: Integrate Secrets Handling & Test LLM Calls (Refined)**
+
+* **(No Change)** Task: Integrate actual secrets handling into `llm_api_client.py`. **Blocker Risk:** Acknowledge dependency.
+* **Task:** Test `llm_api_client.py` with a *small number* of real API calls (using test/sample data). Verify parsing of *real* responses. Debug connection/auth/parsing issues.
+* **(No Change)** Task: Implement caching for LLM *responses* (JSON strings) to avoid re-calling. Key cache by input hash.
+* **Code:** Updated `llm_api_client.py`, cache mechanism.
+
+**Day 8: Implement Reporting & Visualization**
+
+* **(No Change)** Task: Implement functions in `reporting.py` (histograms, confidence plots, confusion matrix, summary tables).
+* **(No Change)** Task: Write tests for reporting functions.
+* **Code:** Python functions in `reporting.py`, tests.
+
+**Day 9: End-to-End Run on Sample Data & Debugging (Refined)**
+
+* **Task:** Run the *entire* pipeline on a small subset of gold standard data.
+    * Load data -> Call LLM API (use cache) -> **Parse responses** -> Filter based on `classified` (if applicable) -> Calculate all metrics -> Generate reports.
+* **(No Change)** Task: Debug integration issues, calculation errors, plotting problems. Ensure outputs look reasonable.
+* **Output:** Working end-to-end pipeline, validated on small scale.
+
+**Day 10: Full Gold Standard Data Run & Analysis (Refined)**
+
+* **(No Change)** Task: Execute pipeline on full gold standard dataset (or large sample if needed due to API time/cost). Monitor progress, ensure caching works.
+* **Task:** Collect results. **Include statistics on `classified: true/false` distribution.**
+* **Task:** Perform initial analysis. If evaluating based on the `classified` flag, compare metrics between `true` cases and all cases (or `false` cases). Look at confidence errors, partial matches.
+* **Output:** Comprehensive results, including `classified` stats. Initial insights.
+
+**Day 11: Prepare Manager Presentation Structure (Refined)**
+
+* **(No Change)** Task: Outline presentation structure (Goal, Method, Metrics, Results, Analysis, Data Quality, Limitations, Next Steps).
+* **Task:** Populate draft. **Specifically mention the `classified` flag** in the methodology and discuss its potential impact or how it was handled in the results/limitations.
+* **Output:** Draft presentation slides/document.
+
+**Day 12: Code Refinement, Documentation & Future-Proofing**
+
+* **(No Change)** Task: Clean code (comments, docstrings, types). Write `README.md` (setup, run instructions, structure).
+* **(No Change)** Task: Address future-proofing (config files, data validation checks for next dataset).
+* **(No Change)** Task: Ensure tests pass. Add asserts in main script.
+* **Code:** Refined code, `README.md`, documented checks for new data.
+
+**Day 13: Buffer, Presentation Polish & Error Analysis**
+
+* **(No Change)** Task: Buffer time.
+* **(No Change)** Task: Deep dive into error analysis (inspect incorrect predictions, especially high-confidence or `classified: false` cases). Add qualitative insights.
+* **(No Change)** Task: Refine presentation.
+* **Output:** Polished presentation, deeper insights.
+
+**Day 14: Final Review & Handoff Preparation**
+
+* **(No Change)** Task: Final review (code, results, docs, presentation). Ensure runnability. Organize files. Prepare for handoff.
+* **Output:** Completed, documented, tested framework and presentation.
+
+---
+
+### Remaining Clarifications Needed:
+
+1.  **Handling `classified: false`:** What is the preferred strategy for evaluation? Exclude these records, evaluate them anyway, or report separately?
+2.  **Likelihood Field:** Is the field name in `sic_candidates` definitely `likelihgood` or is it `likelihood`?
+3.  **Candidate Sorting:** Is the `sic_candidates` list guaranteed to be sorted by likelihood, with the highest likelihood first (matching the top-level `sic_code`)?
+4.  **(From original list)** Gold Standard Truncation: How to handle these records (exclude, flag)?
+5.  **(From original list)** Anonymized Data Role: Confirm its specific purpose (code testing, API testing?).
+6.  **(From original list)** SIC "Closeness": Confirm N-digit match is sufficient, or if other hierarchy exists.
+7.  **(From original list)** Secrets Details: Confirm expected secrets (just API key?) and rough integration method (env var, file?).
+
+This revised plan directly incorporates the API structure you provided. Let me know the answers to the clarifications when you have them.
+
